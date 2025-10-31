@@ -1,0 +1,41 @@
+# Ignore library files
+lib/
+
+# Ignore macOS system files
+*.DS_Store
+
+# Ignore log files
+*.log
+
+# Ignore machine learning model files
+*.h5
+*.hdf5
+*.model
+*.pth
+*.ckpt
+*.pb
+*.pickle 
+*.p
+
+# Ignore virtual environment directories and environment files
+.venv/
+venv/
+.env
+.envrc
+*.env
+*.venv
+
+# Ignore Python byte-compiled and optimized files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Images
+dataIMAGES
+dataSAMPLE
+*.jpeg
+*.jpg
+
+# Ignore IDE and editor directories and files
+.vscode/
+.idea/

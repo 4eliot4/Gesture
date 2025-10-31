@@ -1,0 +1,11 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --ring-color: 0 0% 0%;
+}
+
+* {
+  box-sizing: border-box;
+}
