@@ -61,6 +61,9 @@ class VideoPreprocessor:
         self.hand_landmarks = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
         # fmt: on
 
+
+
+
     def build_adjacency_matrices(self) -> Dict[str, np.ndarray]:
         """
         Build adjacency matrices for each body part based on MediaPipe connections.
@@ -550,6 +553,59 @@ class VideoPreprocessor:
 
         return unified_graph
 
+
+    def extract_shoulder_centered_parts(self, results) -> Optional[Dict[str, np.ndarray]]:
+        """
+        Return SHOULDER-CENTERED per part arrays without concatenation.
+        Keys: "pose", "face", "left_hand", "right_hand" (only those enabled).
+        Each value: (N_part, 4) with [x,y,z,visibility].
+        """
+        unified = self.unify_normalized_landmarks_to_shoulder_center(results)
+        if unified is None:
+            return None
+
+        out = {}
+        # Pose
+        if self.include_pose:
+            pose_arr = np.zeros((len(self.pose_landmarks), 4), dtype=np.float32)
+            for i, idx in enumerate(self.pose_landmarks):
+                lm = unified["pose"][idx]
+                pose_arr[i, 0] = lm["x"]; pose_arr[i, 1] = lm["y"]; pose_arr[i, 2] = lm["z"]
+                pose_arr[i, 3] = lm.get("visibility", 1.0)
+            out["pose"] = pose_arr
+
+        # Face
+        if self.include_face:
+            face_arr = np.zeros((len(self.face_landmarks), 4), dtype=np.float32)
+            if results.face_landmarks:
+                for i, idx in enumerate(self.face_landmarks):
+                    lm = unified["face"][idx]
+                    # Calculate visibility 
+                    visibility = self.calculate_visibility_score(results.face_landmarks.landmark[idx])
+                    face_arr[i, 0] = lm["x"]; face_arr[i, 1] = lm["y"]; face_arr[i, 2] = lm["z"]; face_arr[i, 3] = visibility
+            out["face"] = face_arr
+
+        # Left hand
+        if self.include_hands:
+            lh_arr = np.zeros((len(self.hand_landmarks), 4), dtype=np.float32)
+            if results.left_hand_landmarks:
+                for i, idx in enumerate(self.hand_landmarks):
+                    lm = unified["left_hand"][idx]
+                    visibility = self.calculate_visibility_score(results.left_hand_landmarks.landmark[idx])
+                    lh_arr[i, 0] = lm["x"]; lh_arr[i, 1] = lm["y"]; lh_arr[i, 2] = lm["z"]; lh_arr[i, 3] = visibility
+            out["left_hand"] = lh_arr
+
+            rh_arr = np.zeros((len(self.hand_landmarks), 4), dtype=np.float32)
+            if results.right_hand_landmarks:
+                for i, idx in enumerate(self.hand_landmarks):
+                    lm = unified["right_hand"][idx]
+                    visibility = self.calculate_visibility_score(results.right_hand_landmarks.landmark[idx])
+                    rh_arr[i, 0] = lm["x"]; rh_arr[i, 1] = lm["y"]; rh_arr[i, 2] = lm["z"]; rh_arr[i, 3] = visibility
+            out["right_hand"] = rh_arr
+
+        return out
+
+
     def draw_landmarks_on_frame(self, frame: np.ndarray, results) -> np.ndarray:
         """
         Draw all holistic landmarks on the frame
@@ -689,9 +745,12 @@ class VideoPreprocessor:
                 frame_landmarks = self.extract_landmarks(results)
                 original_landmarks.append(frame_landmarks)
 
+            shoulder_centered_parts = []  # store dicts with per part arrays
             if CoordinateSystem.SHOULDER_CENTERED in coordinate_systems:
-                unified_landmarks = self.extract_unified_landmarks(results)
-                shoulder_centered_landmarks.append(unified_landmarks)
+                # unified_landmarks = self.extract_unified_landmarks(results)   --> add a condition to activate this unified way if needed
+                # shoulder_centered_landmarks.append(unified_landmarks)
+                sc_parts = self.extract_shoulder_centered_parts(results)
+                shoulder_centered_landmarks.append(sc_parts)
 
             # Draw landmarks and save annotated video
             if save_annotated_video:
@@ -823,6 +882,59 @@ class VideoPreprocessor:
                 os.path.join(output_dir, f"{video_name}{suffix}_landmarks.npz"),
                 **npz_arrays,
             )
+
+        # if landmarks is a list of dicts (meaning per part array) : 
+        if len(landmarks_data) > 0 and isinstance(landmarks_data[0], dict):
+            #  SEPARATE SHOULDERCENTERED (SC) SAVE
+            npz_arrays = {}
+            included_parts = []
+
+            # Build per part adjacency matrices (same builders as orginal)
+            adj_mats = self.build_adjacency_matrices()
+            for key, adj in adj_mats.items():
+                # Reuse names with a suffix to indicate SC aka shoulder centered coordinate system
+                npz_arrays[f"adj_{key}_sc"] = adj.astype(np.float32)
+
+            # Collect per-part sequences across T
+            def stack_part(part_key: str, part_size: int) -> np.ndarray:
+                seq = []
+                for frame_dict in landmarks_data:
+                    if frame_dict is not None and part_key in frame_dict and frame_dict[part_key] is not None:
+                        seq.append(frame_dict[part_key])
+                    else:
+                        seq.append(np.zeros((part_size, 4), dtype=np.float32))
+                return np.array(seq)  # (T, N_part, 4)
+
+            if self.include_pose:
+                pose_seq = stack_part("pose", len(self.pose_landmarks))
+                npz_arrays["pose_sc"] = pose_seq
+                npz_arrays["pose_landmarks"] = np.array(self.pose_landmarks)
+                included_parts.append("pose")
+
+            if self.include_face:
+                face_seq = stack_part("face", len(self.face_landmarks))
+                npz_arrays["face_sc"] = face_seq
+                npz_arrays["face_landmarks"] = np.array(self.face_landmarks)
+                included_parts.append("face")
+
+            if self.include_hands:
+                lh_seq = stack_part("left_hand", len(self.hand_landmarks))
+                rh_seq = stack_part("right_hand", len(self.hand_landmarks))
+                npz_arrays["left_hand_sc"]  = lh_seq
+                npz_arrays["right_hand_sc"] = rh_seq
+                npz_arrays["hand_landmarks"] = np.array(self.hand_landmarks)
+                included_parts.extend(["left_hand", "right_hand"])
+
+            # Metadata + validation
+            T = len(landmarks_data)
+            npz_arrays["num_frames"] = np.array([T])
+            npz_arrays["coordinate_system"] = np.array(["shoulder_centered"], dtype="U20")
+            npz_arrays["included_parts"] = np.array(included_parts, dtype="U20")
+            npz_arrays["version"] = np.array(["v2_sc_separate"], dtype="U32")  # NEW: versioning
+
+            # SAVE
+            out_name = f"{video_name}_shoulder_centered_parts.npz"
+            np.savez_compressed(os.path.join(output_dir, out_name), **npz_arrays)
 
         else:  # shoulder_centered - unified graph
             # Handle unified graph format
