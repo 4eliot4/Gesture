@@ -146,128 +146,7 @@ class VideoPreprocessor:
 
         return adjacency_matrices
 
-    def build_unified_adjacency_matrix(self) -> np.ndarray:
-        """
-        Build a unified adjacency matrix for the shoulder-centered coordinate system.
-        This includes connections within each body part AND connections between body parts:
-        - Hands to pose via wrists (hand wrist idx 0 connects to pose wrist idx 15/16)
-        - Face to pose via nose (face nose idx 0 connects to pose nose idx 0)
-        """
-        # Define inter-body-part connections (in original MediaPipe indices)
-        # HANDS_POSE_CONNECTIONS = frozenset([(0, 15), (0, 16)])  # (hand_wrist, left_pose_wrist), (hand_wrist, right_pose_wrist)
-        # FACE_POSE_CONNECTIONS = frozenset([(0, 0)])  # (face_nose, pose_nose)
 
-        # Calculate total size
-        total_landmarks = 0
-        if self.include_pose:
-            total_landmarks += len(self.pose_landmarks)
-        if self.include_face:
-            total_landmarks += len(self.face_landmarks)
-        if self.include_hands:
-            total_landmarks += 2 * len(self.hand_landmarks)
-
-        # Initialize unified adjacency matrix
-        unified_adj = np.zeros((total_landmarks, total_landmarks), dtype=np.float32)
-
-        # Get individual adjacency matrices
-        adj_matrices = self.build_adjacency_matrices()
-
-        # Create index mappings from original MediaPipe indices to filtered indices
-        if self.include_pose:
-            pose_idx_map = {
-                orig_idx: new_idx
-                for new_idx, orig_idx in enumerate(self.pose_landmarks)
-            }
-        if self.include_face:
-            face_idx_map = {
-                orig_idx: new_idx
-                for new_idx, orig_idx in enumerate(self.face_landmarks)
-            }
-        if self.include_hands:
-            hand_idx_map = {
-                orig_idx: new_idx
-                for new_idx, orig_idx in enumerate(self.hand_landmarks)
-            }
-
-        # Fill in the unified matrix block by block
-        current_idx = 0
-        indices_pos = {}
-
-        if self.include_pose:
-            pose_size = len(self.pose_landmarks)
-            unified_adj[
-                current_idx : current_idx + pose_size,
-                current_idx : current_idx + pose_size,
-            ] = adj_matrices["pose"]
-            indices_pos["pose"] = (current_idx, current_idx + pose_size)
-            current_idx += pose_size
-
-        if self.include_face:
-            face_size = len(self.face_landmarks)
-            unified_adj[
-                current_idx : current_idx + face_size,
-                current_idx : current_idx + face_size,
-            ] = adj_matrices["face"]
-            indices_pos["face"] = (current_idx, current_idx + face_size)
-            current_idx += face_size
-
-        if self.include_hands:
-            hand_size = len(self.hand_landmarks)
-            # Left hand (MediaPipe left = actually right hand in mirrored video)
-            unified_adj[
-                current_idx : current_idx + hand_size,
-                current_idx : current_idx + hand_size,
-            ] = adj_matrices["left_hand"]
-            indices_pos["left_hand"] = (current_idx, current_idx + hand_size)
-            current_idx += hand_size
-
-            # Right hand (MediaPipe right = actually left hand in mirrored video)
-            unified_adj[
-                current_idx : current_idx + hand_size,
-                current_idx : current_idx + hand_size,
-            ] = adj_matrices["right_hand"]
-            indices_pos["right_hand"] = (current_idx, current_idx + hand_size)
-
-        # Add inter-body-part connections
-        # Connect hands to pose (wrists)
-        if self.include_hands and self.include_pose:
-            # Check if wrist landmarks exist in filtered sets
-            hand_wrist_orig = 0  # Hand wrist is always index 0 in MediaPipe
-            left_wrist_pose_orig = 15  # Left wrist in pose
-            right_wrist_pose_orig = 16  # Right wrist in pose
-
-            if hand_wrist_orig in hand_idx_map:
-                # Connect left hand wrist to pose right wrist (because of mirroring)
-                left_hand_wrist_unified = (
-                    indices_pos["left_hand"][0] + hand_idx_map[hand_wrist_orig]
-                )
-                pose_right_wrist_unified = (
-                    indices_pos["pose"][0] + pose_idx_map[right_wrist_pose_orig]
-                )
-                unified_adj[left_hand_wrist_unified, pose_right_wrist_unified] = 1.0
-                unified_adj[pose_right_wrist_unified, left_hand_wrist_unified] = 1.0
-
-                # Connect right hand wrist to pose left wrist (because of mirroring)
-                right_hand_wrist_unified = (
-                    indices_pos["right_hand"][0] + hand_idx_map[hand_wrist_orig]
-                )
-                pose_left_wrist_unified = (
-                    indices_pos["pose"][0] + pose_idx_map[left_wrist_pose_orig]
-                )
-                unified_adj[right_hand_wrist_unified, pose_left_wrist_unified] = 1.0
-                unified_adj[pose_left_wrist_unified, right_hand_wrist_unified] = 1.0
-
-        # Connect face to pose (nose)
-        if self.include_face and self.include_pose:
-            face_nose_orig = 1  # Nose is index 0 in both
-            pose_nose_orig = 0
-
-            face_nose_unified = indices_pos["face"][0] + face_idx_map[face_nose_orig]
-            pose_nose_unified = indices_pos["pose"][0] + pose_idx_map[pose_nose_orig]
-            unified_adj[face_nose_unified, pose_nose_unified] = 1.0
-            unified_adj[pose_nose_unified, face_nose_unified] = 1.0
-
-        return unified_adj
 
     def calculate_visibility_score(self, landmark, margin: float = 0.1) -> float:
         """
@@ -468,90 +347,6 @@ class VideoPreprocessor:
 
         return landmarks_data
 
-    def extract_unified_landmarks(self, results) -> Optional[np.ndarray]:
-        """
-        Extract SHOULDER-CENTERED unified landmarks from MediaPipe Holistic
-        Returns a single concatenated array of SELECTED landmarks in shoulder-centered coordinates
-        Shape depends on which body parts are included (based on include flags)
-        Each landmark has [x, y, z, visibility] format
-        """
-        unified_data = self.unify_normalized_landmarks_to_shoulder_center(results)
-
-        if unified_data is None:
-            return None
-
-        landmarks_to_concatenate = []
-
-        # Convert pose to numpy array - FILTER selected landmarks only
-        if self.include_pose:
-            if unified_data["pose"]:
-                pose_array = []
-                for idx in self.pose_landmarks:
-                    lm = unified_data["pose"][idx]
-                    pose_array.append(
-                        [lm["x"], lm["y"], lm["z"], lm.get("visibility", 1.0)]
-                    )
-                pose_landmarks = np.array(pose_array)
-            else:
-                pose_landmarks = np.zeros((len(self.pose_landmarks), 4))
-            landmarks_to_concatenate.append(pose_landmarks)
-
-        # Convert face to numpy array - FILTER selected landmarks only
-        if self.include_face:
-            if unified_data["face"] and results.face_landmarks:
-                face_array = []
-                for idx in self.face_landmarks:
-                    lm = unified_data["face"][idx]
-                    # Calculate visibility from original normalized coordinates
-                    visibility = self.calculate_visibility_score(
-                        results.face_landmarks.landmark[idx]
-                    )
-                    face_array.append([lm["x"], lm["y"], lm["z"], visibility])
-                face_landmarks = np.array(face_array)
-            else:
-                face_landmarks = np.zeros((len(self.face_landmarks), 4))
-            landmarks_to_concatenate.append(face_landmarks)
-
-        # Convert hands to numpy arrays - FILTER selected landmarks only
-        if self.include_hands:
-            # Left hand
-            if unified_data["left_hand"] and results.left_hand_landmarks:
-                left_hand_array = []
-                for idx in self.hand_landmarks:
-                    lm = unified_data["left_hand"][idx]
-                    # Calculate visibility from original normalized coordinates
-                    visibility = self.calculate_visibility_score(
-                        results.left_hand_landmarks.landmark[idx]
-                    )
-                    left_hand_array.append([lm["x"], lm["y"], lm["z"], visibility])
-                left_hand_landmarks = np.array(left_hand_array)
-            else:
-                left_hand_landmarks = np.zeros((len(self.hand_landmarks), 4))
-            landmarks_to_concatenate.append(left_hand_landmarks)
-
-            # Right hand
-            if unified_data["right_hand"] and results.right_hand_landmarks:
-                right_hand_array = []
-                for idx in self.hand_landmarks:
-                    lm = unified_data["right_hand"][idx]
-                    # Calculate visibility from original normalized coordinates
-                    visibility = self.calculate_visibility_score(
-                        results.right_hand_landmarks.landmark[idx]
-                    )
-                    right_hand_array.append([lm["x"], lm["y"], lm["z"], visibility])
-                right_hand_landmarks = np.array(right_hand_array)
-            else:
-                right_hand_landmarks = np.zeros((len(self.hand_landmarks), 4))
-            landmarks_to_concatenate.append(right_hand_landmarks)
-
-        # Concatenate selected landmarks into a single unified graph
-        if landmarks_to_concatenate:
-            unified_graph = np.concatenate(landmarks_to_concatenate, axis=0)
-        else:
-            # If no body parts selected, return empty array
-            unified_graph = np.zeros((0, 4))
-
-        return unified_graph
 
 
     def extract_shoulder_centered_parts(self, results) -> Optional[Dict[str, np.ndarray]]:
@@ -747,8 +542,6 @@ class VideoPreprocessor:
 
             shoulder_centered_parts = []  # store dicts with per part arrays
             if CoordinateSystem.SHOULDER_CENTERED in coordinate_systems:
-                # unified_landmarks = self.extract_unified_landmarks(results)   --> add a condition to activate this unified way if needed
-                # shoulder_centered_landmarks.append(unified_landmarks)
                 sc_parts = self.extract_shoulder_centered_parts(results)
                 shoulder_centered_landmarks.append(sc_parts)
 
@@ -884,7 +677,7 @@ class VideoPreprocessor:
             )
 
         # if landmarks is a list of dicts (meaning per part array) : 
-        if len(landmarks_data) > 0 and isinstance(landmarks_data[0], dict):
+        else:
             #  SEPARATE SHOULDERCENTERED (SC) SAVE
             npz_arrays = {}
             included_parts = []
@@ -936,89 +729,7 @@ class VideoPreprocessor:
             out_name = f"{video_name}_shoulder_centered_parts.npz"
             np.savez_compressed(os.path.join(output_dir, out_name), **npz_arrays)
 
-        else:  # shoulder_centered - unified graph
-            # Handle unified graph format
-            unified_data = []
-
-            # Calculate total landmarks from selected body parts
-            total_landmarks = 0
-            if self.include_pose:
-                total_landmarks += len(self.pose_landmarks)
-            if self.include_face:
-                total_landmarks += len(self.face_landmarks)
-            if self.include_hands:
-                total_landmarks += 2 * len(self.hand_landmarks)  # left + right
-
-            for frame_landmarks in landmarks_data:
-                if frame_landmarks is not None:
-                    unified_data.append(frame_landmarks)
-                else:
-                    # If no landmarks, create zero array with correct size
-                    unified_data.append(np.zeros((total_landmarks, 4)))
-
-            unified_data = np.array(
-                unified_data
-            )  # Shape: (num_frames, total_landmarks, 4)
-
-            # Build unified adjacency matrix
-            unified_adj_matrix = self.build_unified_adjacency_matrix()
-
-            # Build landmark structure metadata
-            included_parts = []
-            landmark_indices = []
-            landmark_starts = []
-            landmark_ends = []
-            landmark_counts = []
-            current_idx = 0
-
-            if self.include_pose:
-                pose_count = len(self.pose_landmarks)
-                included_parts.append("pose")
-                landmark_indices.extend(self.pose_landmarks)
-                landmark_starts.append(current_idx)
-                landmark_ends.append(current_idx + pose_count)
-                landmark_counts.append(pose_count)
-                current_idx += pose_count
-
-            if self.include_face:
-                face_count = len(self.face_landmarks)
-                included_parts.append("face")
-                landmark_indices.extend(self.face_landmarks)
-                landmark_starts.append(current_idx)
-                landmark_ends.append(current_idx + face_count)
-                landmark_counts.append(face_count)
-                current_idx += face_count
-
-            if self.include_hands:
-                hand_count = len(self.hand_landmarks)
-                included_parts.extend(["left_hand", "right_hand"])
-                landmark_indices.extend(self.hand_landmarks)
-                landmark_starts.append(current_idx)
-                landmark_ends.append(current_idx + hand_count)
-                landmark_counts.append(hand_count)
-                current_idx += hand_count
-
-                landmark_indices.extend(self.hand_landmarks)
-                landmark_starts.append(current_idx)
-                landmark_ends.append(current_idx + hand_count)
-                landmark_counts.append(hand_count)
-                current_idx += hand_count
-
-            # Save as compressed numpy array with all metadata
-            np.savez_compressed(
-                os.path.join(output_dir, f"{video_name}{suffix}_landmarks.npz"),
-                unified_graph=unified_data,
-                adjacency_matrix=unified_adj_matrix,
-                num_frames=np.array([num_frames]),
-                coordinate_system=np.array([coordinate_system], dtype="U20"),
-                total_landmarks=np.array([total_landmarks]),
-                included_parts=np.array(included_parts, dtype="U20"),
-                landmark_indices=np.array(landmark_indices),
-                landmark_starts=np.array(landmark_starts),
-                landmark_ends=np.array(landmark_ends),
-                landmark_counts=np.array(landmark_counts),
-            )
-
+        
         print(
             f"Dataset ({coordinate_system}) saved for {video_name} with {num_frames} frames"
         )
