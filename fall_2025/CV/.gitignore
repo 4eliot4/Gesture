@@ -1,5 +1,5 @@
 # Python-generated files
-__pycache__/
+*__pycache__/
 *.py[oc]
 build/
 dist/
@@ -13,6 +13,8 @@ data/asl_videos
 # Extra
 .DS_Store
 logs
+.env
+wandb
 
 *.mp4
 venv/

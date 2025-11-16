@@ -8,7 +8,7 @@ import argparse
 import sys
 import pandas as pd
 from pathlib import Path
-from src.data_preprocessing.video_preprocessor import VideoPreprocessor, CoordinateSystem
+from src.data_preprocessing.video_preprocessor import VideoPreprocessor
 
 
 def parse_args():
@@ -40,34 +40,16 @@ def parse_args():
         help="Include pose landmarks in extraction",
     )
     parser.add_argument(
-        "--no_pose",
-        action="store_false",
-        dest="include_pose",
-        help="Exclude pose landmarks from extraction",
-    )
-    parser.add_argument(
         "--include_face",
         action="store_true",
         default=False,
         help="Include face landmarks in extraction",
     )
     parser.add_argument(
-        "--no_face",
-        action="store_false",
-        dest="include_face",
-        help="Exclude face landmarks from extraction",
-    )
-    parser.add_argument(
         "--include_hands",
         action="store_true",
         default=True,
         help="Include hand landmarks in extraction",
-    )
-    parser.add_argument(
-        "--no_hands",
-        action="store_false",
-        dest="include_hands",
-        help="Exclude hand landmarks from extraction",
     )
 
     # MediaPipe confidence thresholds
@@ -84,15 +66,6 @@ def parse_args():
         help="Minimum tracking confidence for MediaPipe (0.0 to 1.0)",
     )
 
-    # Coordinate systems
-    parser.add_argument(
-        "--coordinate_systems",
-        type=str,
-        nargs="+",
-        choices=["original", "shoulder_centered"],
-        default=["shoulder_centered"],
-        help="Coordinate systems to save. Options: 'original' (raw MediaPipe normalized [0,1]) or 'shoulder_centered' (unified shoulder-centered coordinates)",
-    )
 
     # Video extensions
     parser.add_argument(
@@ -136,22 +109,23 @@ def main():
     output_path = Path(args.output_folder)
     output_path.mkdir(parents=True, exist_ok=True)
 
-    # Load gloss mapping from JSON
+    # Load metadata from JSON
     df_wlasl = pd.read_json(args.dataset_json)
     df_exploded = df_wlasl.explode("instances")
     df_wlasl_info = pd.concat(
         [df_exploded["gloss"], df_exploded["instances"].apply(pd.Series)], axis=1
     )
-    gloss_mapping = dict(zip(df_wlasl_info["video_id"].astype(str), df_wlasl_info["gloss"]))
-    print(f"Loaded gloss mapping for {len(gloss_mapping)} videos from {args.dataset_json}")
 
-    # Convert coordinate system strings to enum
-    coordinate_systems = []
-    for cs_str in args.coordinate_systems:
-        if cs_str == "original":
-            coordinate_systems.append(CoordinateSystem.ORIGINAL)
-        elif cs_str == "shoulder_centered":
-            coordinate_systems.append(CoordinateSystem.SHOULDER_CENTERED)
+    # Create metadata list with gloss, video_id, and signer_id
+    metadata_list = []
+    for _, row in df_wlasl_info.iterrows():
+        metadata_list.append({
+            "gloss": row["gloss"],
+            "video_id": str(row["video_id"]),
+            "signer_id": row["signer_id"]
+        })
+
+    print(f"Loaded metadata for {len(metadata_list)} videos from {args.dataset_json}")
 
     # Create VideoPreprocessor instance
     preprocessor = VideoPreprocessor(
@@ -167,9 +141,8 @@ def main():
         preprocessor.process_folder(
             input_folder=args.input_folder,
             output_folder=args.output_folder,
+            metadata_list=metadata_list,
             video_extensions=args.video_extensions,
-            coordinate_systems=coordinate_systems,
-            gloss_mapping=gloss_mapping,
             save_annotated_video=args.save_annotated_video
         )
         print("\n" + "=" * 80)
