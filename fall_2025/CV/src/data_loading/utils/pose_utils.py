@@ -1,5 +1,6 @@
 from typing import Optional, Dict, List, Set, Tuple
 import numpy as np
+import pandas as pd
 
 
 class Landmark:
@@ -331,3 +332,133 @@ def build_unified_adjacency_matrix(
             unified_adj[pose_nose_unified, face_nose_unified] = 1.0
 
     return unified_adj
+
+def get_hand_mapping(frame_df: pd.DataFrame, HAND_LANDMARKS: list[int]):
+    """
+    Determine which labeled hand corresponds to which actual hand based on spatial proximity to wrists.
+
+    For each detected hand (whether labeled "left_hand" or "right_hand"), determine if it's
+    actually closer to the left wrist or right wrist, and return a mapping.
+
+    Args:
+        frame_df: DataFrame for a single frame with columns: type, landmark_index, x, y, z
+        HAND_LANDMARKS: List of hand landmark indices to use
+
+    Returns:
+        dict: Mapping where keys are the actual hand positions ("left_hand", "right_hand")
+              and values are the labels in the data ("left_hand", "right_hand", or None)
+              Example: {"left_hand": "right_hand", "right_hand": "left_hand"} means swapped
+                      {"left_hand": "left_hand", "right_hand": None} means only left detected
+    """
+    mapping: Dict[str, Optional[str]] = {"left_hand": None, "right_hand": None}
+
+    # Get wrists from pose (landmark 15=left, 16=right)
+    left_wrist_row = frame_df[
+        (frame_df["type"] == "pose") & (frame_df["landmark_index"] == 15)
+    ]
+    right_wrist_row = frame_df[
+        (frame_df["type"] == "pose") & (frame_df["landmark_index"] == 16)
+    ]
+
+    if left_wrist_row.empty or right_wrist_row.empty:
+        # Can't determine without wrists, return default
+        mapping["left_hand"] = (
+            "left_hand" if "left_hand" in frame_df["type"].values else None
+        )
+        mapping["right_hand"] = (
+            "right_hand" if "right_hand" in frame_df["type"].values else None
+        )
+        return mapping
+
+    left_wrist = left_wrist_row.iloc[0]
+    right_wrist = right_wrist_row.iloc[0]
+
+    # Check if wrist coordinates are valid
+    if (
+        pd.isna(left_wrist["x"])
+        or pd.isna(left_wrist["y"])
+        or pd.isna(right_wrist["x"])
+        or pd.isna(right_wrist["y"])
+    ):
+        mapping["left_hand"] = (
+            "left_hand" if "left_hand" in frame_df["type"].values else None
+        )
+        mapping["right_hand"] = (
+            "right_hand" if "right_hand" in frame_df["type"].values else None
+        )
+        return mapping
+
+    # Get palm positions for both hands
+    left_hand_palm_row = frame_df[
+        (frame_df["type"] == "left_hand")
+        & (frame_df["landmark_index"] == HAND_LANDMARKS[0])
+    ]
+    right_hand_palm_row = frame_df[
+        (frame_df["type"] == "right_hand")
+        & (frame_df["landmark_index"] == HAND_LANDMARKS[0])
+    ]
+
+    # Calculate distances for all combinations
+    distances = {}
+
+    left_palm = left_hand_palm_row.iloc[0]
+    if not (pd.isna(left_palm["x"]) or pd.isna(left_palm["y"])):
+        distances[("left_hand", "left_wrist")] = np.sqrt(
+            (left_wrist["x"] - left_palm["x"]) ** 2
+            + (left_wrist["y"] - left_palm["y"]) ** 2
+        )
+        distances[("left_hand", "right_wrist")] = np.sqrt(
+            (right_wrist["x"] - left_palm["x"]) ** 2
+            + (right_wrist["y"] - left_palm["y"]) ** 2
+        )
+
+    right_palm = right_hand_palm_row.iloc[0]
+    if not (pd.isna(right_palm["x"]) or pd.isna(right_palm["y"])):
+        distances[("right_hand", "left_wrist")] = np.sqrt(
+            (left_wrist["x"] - right_palm["x"]) ** 2
+            + (left_wrist["y"] - right_palm["y"]) ** 2
+        )
+        distances[("right_hand", "right_wrist")] = np.sqrt(
+            (right_wrist["x"] - right_palm["x"]) ** 2
+            + (right_wrist["y"] - right_palm["y"]) ** 2
+        )
+
+    # If both hands detected, find the optimal assignment
+    if len(distances) == 4:
+        # Compare the two possible assignments:
+        # Assignment 1: left_hand -> left_wrist, right_hand -> right_wrist (no swap)
+        # Assignment 2: left_hand -> right_wrist, right_hand -> left_wrist (swap)
+
+        assignment1_cost = (
+            distances[("left_hand", "left_wrist")]
+            + distances[("right_hand", "right_wrist")]
+        )
+        assignment2_cost = (
+            distances[("left_hand", "right_wrist")]
+            + distances[("right_hand", "left_wrist")]
+        )
+
+        if assignment1_cost <= assignment2_cost:
+            # No swap needed
+            mapping["left_hand"] = "left_hand"
+            mapping["right_hand"] = "right_hand"
+        else:
+            # Swap needed
+            mapping["left_hand"] = "right_hand"
+            mapping["right_hand"] = "left_hand"
+    elif len(distances) == 2:
+        # Only one hand detected, assign it to the closest wrist
+        for labeled_hand in ["left_hand", "right_hand"]:
+            if (labeled_hand, "left_wrist") in distances and (
+                labeled_hand,
+                "right_wrist",
+            ) in distances:
+                if (
+                    distances[(labeled_hand, "left_wrist")]
+                    < distances[(labeled_hand, "right_wrist")]
+                ):
+                    mapping["left_hand"] = labeled_hand
+                else:
+                    mapping["right_hand"] = labeled_hand
+
+    return mapping

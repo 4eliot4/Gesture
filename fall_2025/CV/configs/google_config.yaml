@@ -5,16 +5,16 @@ wandb:
   project: "gesture-recognition"
   entity: null  # Set your wandb entity/team name here or via env
   name: STGCN_conv1d  # Run name (auto-generated if null)
-  tags: ["stgcn", "wlasl"]
-  notes: "Training STGCN on WLASL dataset"
+  tags: ["stgcn", "islr"]
+  notes: "Training STGCN on google ISLR dataset"
   mode: "online"  # "online", "offline", or "disabled"
 
 # Data settings
 data:
-  gloss_mapping_file: "data/gloss_map.csv" # The glosses to use
-  metadata_file: "/scratch/izar/nowak/gesture/data/wlaslvideos_processed/train.csv"
-  cache_dir: "/scratch/izar/nowak/gesture/unfied_shoulder_centered"
-  data_root: "/scratch/izar/nowak/gesture/data/wlaslvideos_processed"
+  gloss_mapping_file: "data/google_gloss_map.csv" # The glosses to use
+  metadata_file: "$SCRATCH/gesture/data/asl-signs/train.csv"
+  cache_dir: "$SCRATCH/gesture/google-data/unfied_shoulder_centered"
+  data_root: "$SCRATCH/gesture/data/asl-signs"
   coordinate_system: "shoulder_centered"  # "original" or "shoulder_centered"
   min_frames: 0
   max_frames: 300
@@ -25,7 +25,7 @@ data:
 # DataLoader settings
 dataloader:
   batch_size: 32
-  num_workers: 10
+  num_workers: 20
   shuffle_train: true
   pin_memory: true
 
@@ -42,7 +42,7 @@ model:
 
 # Training settings
 training:
-  num_epochs: 500
+  num_epochs: 100
   learning_rate: 0.001
   weight_decay: 0.0001
   optimizer: "adamw"  # "adam", "adamw", "sgd"
@@ -59,10 +59,9 @@ training:
   # Checkpointing
   checkpoint_dir: "$SCRATCH/gesture/checkpoints"
   save_best_only: true
-  save_frequency: 5  # Save every N epochs
-  pretained_checkpoint: ""
-  
-  #load
+  save_frequency: 10  # Save every N epochs
+
+  #load 
   pretrained_checkpoint: ""
 
 # Device settings

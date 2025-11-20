@@ -11,6 +11,25 @@
 
 # WANDB_MODE=disabled
 
+# Parse command line arguments
+CONFIG_FILE="configs/config.yaml"  # Default config file
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -c|--config)
+            CONFIG_FILE="$2"
+            shift 2
+            ;;
+        *)
+            echo "Unknown option: $1"
+            echo "Usage: $0 [-c|--config CONFIG_FILE]"
+            exit 1
+            ;;
+    esac
+done
+
+echo "Using config file: $CONFIG_FILE"
+
 # Change to the script directory
 cd "${SLURM_SUBMIT_DIR:-$(dirname "$0")}"
 
@@ -42,7 +61,9 @@ if [ ! -z "$SLURM_JOB_ID" ]; then
 fi
 
 # Run training with config file
-python main.py --config configs/config.yaml
-
-# Or with a different config
-# python main.py --config configs/experiment1.yaml
+# Pass SLURM job ID as run-id if available
+if [ ! -z "$SLURM_JOB_ID" ]; then
+    python main.py --config "${CONFIG_FILE}" --run-id "${SLURM_JOB_ID}"
+else
+    python main.py --config "${CONFIG_FILE}"
+fi

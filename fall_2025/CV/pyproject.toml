@@ -15,5 +15,6 @@ dependencies = [
     "pyarrow>=22.0.0",
     "pyyaml>=6.0.3",
     "torch>=2.8.0",
+    "tqdm>=4.67.1",
     "wandb>=0.22.3",
 ]

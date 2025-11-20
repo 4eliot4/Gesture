@@ -1,11 +1,15 @@
 import torch
 from torch.utils.data import DataLoader
 import numpy as np
+import random
 from pathlib import Path
 import argparse
 import wandb
 import os
 import time
+import yaml
+import pandas as pd
+from functools import partial
 
 from src.models.stgcn import STGCN
 from src.utils.config_loader import load_config
@@ -13,7 +17,7 @@ from src.data_loading.parquet_data_loader import UnifiedSkeletonDataset
 from src.data_loading.utils.utils import collate_fn_pad_sequences, normalize_adjacency_matrix
 
 
-def train(model, train_loader, val_loader, num_epochs, learning_rate, device, num_nodes, config):
+def train(model, train_loader, val_loader, num_epochs, learning_rate, device, num_nodes, config, run_id=None, gloss_map=None):
     """Train the STGCN model."""
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=config["training"]["weight_decay"])
 
@@ -27,7 +31,23 @@ def train(model, train_loader, val_loader, num_epochs, learning_rate, device, nu
 
     best_val_acc = 0.0
     checkpoint_dir = Path(os.path.expandvars(config["training"]["checkpoint_dir"]))
+    if run_id:
+        checkpoint_dir = checkpoint_dir / run_id
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    print(f"Checkpoints will be saved to: {checkpoint_dir}")
+
+    # Save configuration and gloss mapping
+
+    config_save_path = checkpoint_dir / "config.yaml"
+    with open(config_save_path, 'w') as f:
+        yaml.dump(config.to_dict(), f, default_flow_style=False, sort_keys=False)
+    print(f"Configuration saved to: {config_save_path}")
+
+    if gloss_map is not None:
+        gloss_map_path = checkpoint_dir / "gloss_mapping.csv"
+        gloss_df = pd.DataFrame(list(gloss_map.items()), columns=['gloss', 'label'])
+        gloss_df.to_csv(gloss_map_path, index=False)
+        print(f"Gloss mapping saved to: {gloss_map_path}")
 
     global_step = 0
 
@@ -144,7 +164,11 @@ def train(model, train_loader, val_loader, num_epochs, learning_rate, device, nu
             "val/loss": val_loss_avg,
             "val/accuracy": val_acc,
             "val/accuracy_top5": val_acc_top5,
-        })
+        }, step=global_step)
+
+        if epoch % config["training"]["save_frequency"] == 0:
+            model_path = checkpoint_dir / f"model_epoch_{epoch}.pth"
+            torch.save(model.state_dict(), model_path)
 
         # Save best model
         if val_acc > best_val_acc:
@@ -164,6 +188,7 @@ if __name__ == "__main__":
     # Parse command line arguments
     parser = argparse.ArgumentParser(description="Train STGCN model on gesture recognition")
     parser.add_argument("--config", type=str, default="configs/config.yaml", help="Path to config file")
+    parser.add_argument("--run-id", type=str, default=None, help="Run ID for organizing checkpoints (e.g., SLURM job ID)")
     args = parser.parse_args()
 
     # Load configuration
@@ -207,25 +232,38 @@ if __name__ == "__main__":
     print("\nLoading dataset...")
 
     # Load gloss mapping
-    import pandas as pd
-    gloss_df = pd.read_csv(config["data"]["gloss_mapping_file"])
+    gloss_mapping_file = os.path.expandvars(config["data"]["gloss_mapping_file"])
+    gloss_df = pd.read_csv(gloss_mapping_file)
     gloss_map = dict(zip(gloss_df['gloss'], gloss_df['label']))
 
-    # Create cache directory
-    cache_dir = config["data"]["cache_dir"]
+    # Expand environment variables in paths
+    data_root = os.path.expandvars(config["data"]["data_root"])
+    cache_dir = os.path.expandvars(config["data"]["cache_dir"])
+    metadata_file = os.path.expandvars(config["data"]["metadata_file"]) if config["data"]["metadata_file"] else None
 
     dataset = UnifiedSkeletonDataset(
-        data_root=config["data"]["data_root"],
-        cache_dir=config["data"]["cache_dir"],
+        data_root=data_root,
+        cache_dir=cache_dir,
         gloss_map=gloss_map,
-        metadata_file=config["data"]["metadata_file"],
+        metadata_file=metadata_file,
         min_frames=config["data"]["min_frames"],
         max_frames=config["data"]["max_frames"],
-        body_parts=["pose", "left_hand", "right_hand"]
+        body_parts=config["data"]["body_parts"]
     )
 
+    # Set seed for reproducibility (dataset shuffling, splitting and model creation)
+    seed = config["data"]["random_seed"]
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)  # for multi-GPU
+    np.random.seed(seed)
+    random.seed(seed)
+
+    # For deterministic behavior (may reduce performance)
+    # torch.backends.cudnn.deterministic = True
+    # torch.backends.cudnn.benchmark = False
+
     # Split dataset
-    torch.manual_seed(config["data"]["random_seed"])
     train_size = int(config["data"]["train_split"] * len(dataset))
     val_size = len(dataset) - train_size
     train_dataset, val_dataset = torch.utils.data.random_split(
@@ -235,7 +273,6 @@ if __name__ == "__main__":
     print(f"Train size: {len(train_dataset)}, Val size: {len(val_dataset)}")
 
     # Create dataloaders with fixed max_frames
-    from functools import partial
     collate_fn = partial(collate_fn_pad_sequences, max_frames=config["data"]["max_frames"])
 
     train_loader = DataLoader(
@@ -279,8 +316,28 @@ if __name__ == "__main__":
         mlp_hidden=tuple(config["model"].get("mlp_hidden", [256, 128])),
         dropout=config["model"].get("dropout", 0.5),
     ).to(device)
+    
+    #load 
+    pretrained_ckpt = config["training"].get("pretrained_checkpoint", "")
+    if pretrained_ckpt:
+        ckpt_path = os.path.expandvars(pretrained_ckpt)
+        print(f"[INFO] Loading pretrained weights from: {ckpt_path}")
+        ckpt = torch.load(ckpt_path, map_location=device)
+        state_dict = ckpt
 
-    # model = torch.compile(model)
+        model_dict = model.state_dict()
+        loaded_state = {}
+        for k, v in state_dict.items():
+            if k in model_dict and model_dict[k].shape == v.shape:
+                loaded_state[k] = v
+
+        model_dict.update(loaded_state)
+        model.load_state_dict(model_dict)
+
+        print(f"Loaded {len(loaded_state)}/{len(model_dict)} parameters from pretraining\n")    
+
+
+    model = torch.compile(model)
 
     print(f"Model has {sum(p.numel() for p in model.parameters()):,} parameters\n")
 
@@ -294,8 +351,12 @@ if __name__ == "__main__":
         device=device,
         num_nodes=num_nodes,
         config=config,
+        run_id=args.run_id,
+        gloss_map=gloss_map,
     )
 
+    
+    
     # Finish wandb run
     wandb.finish()
     print("Wandb run finished")

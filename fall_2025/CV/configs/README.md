@@ -4,7 +4,6 @@ This directory contains YAML configuration files for training experiments.
 
 ## Usage
 
-
 Run training with a config file:
 ```bash
 python main.py --config configs/config.yaml
