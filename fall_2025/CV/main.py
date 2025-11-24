@@ -317,29 +317,34 @@ if __name__ == "__main__":
         dropout=config["model"].get("dropout", 0.5),
     ).to(device)
     
-    #load 
+    #load (aéfter .pth analysis)
     pretrained_ckpt = config["training"].get("pretrained_checkpoint", "")
     if pretrained_ckpt:
         ckpt_path = os.path.expandvars(pretrained_ckpt)
-        print(f"[INFO] Loading pretrained weights from: {ckpt_path}")
+        print(f"Loading pretrained weights from: {ckpt_path}")
         ckpt = torch.load(ckpt_path, map_location=device)
-        state_dict = ckpt
-
+        raw_state = ckpt
         model_dict = model.state_dict()
         loaded_state = {}
-        for k, v in state_dict.items():
-            if k in model_dict and model_dict[k].shape == v.shape:
-                loaded_state[k] = v
+        prefix = "_orig_mod."
 
-        model_dict.update(loaded_state)
-        model.load_state_dict(model_dict)
+        for k, v in raw_state.items():
+            if k.startswith(prefix):
+                new_k = k[len(prefix):] # removes the prefix _orig
+            else:
+                new_k = k
 
-        print(f"Loaded {len(loaded_state)}/{len(model_dict)} parameters from pretraining\n")    
+            if new_k in model_dict and model_dict[new_k].shape == v.shape:
+                loaded_state[new_k] = v
 
-
-    model = torch.compile(model)
-
-    print(f"Model has {sum(p.numel() for p in model.parameters()):,} parameters\n")
+        if not loaded_state:
+            print("WARNING: No matching parameters found between checkpoint and current model. Pretraining NOT used.")
+        else:
+            model_dict.update(loaded_state)
+            model.load_state_dict(model_dict)
+            print(f"Loaded {len(loaded_state)}/{len(model_dict)} parameters from pretraining")
+    else:
+        print("No pretrained checkpoint specified. Training from scratch.")
 
     # Train
     best_val_acc = train(

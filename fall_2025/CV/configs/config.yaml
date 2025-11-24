@@ -12,9 +12,9 @@ wandb:
 # Data settings
 data:
   gloss_mapping_file: "data/gloss_map.csv" # The glosses to use
-  metadata_file: "/scratch/izar/nowak/gesture/data/wlaslvideos_processed/train.csv"
-  cache_dir: "/scratch/izar/nowak/gesture/unfied_shoulder_centered"
-  data_root: "/scratch/izar/nowak/gesture/data/wlaslvideos_processed"
+  metadata_file: "/work/team-ai/GESTURE/fall_2025_data/data/wlaslvideos_processed/train.csv"
+  cache_dir: "/scratch/izar/bourdari/gesture/cache"
+  data_root: "/work/team-ai/GESTURE/fall_2025_data/data/wlaslvideos_processed"
   coordinate_system: "shoulder_centered"  # "original" or "shoulder_centered"
   min_frames: 0
   max_frames: 300
