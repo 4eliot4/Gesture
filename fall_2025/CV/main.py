@@ -346,6 +346,9 @@ if __name__ == "__main__":
     else:
         print("No pretrained checkpoint specified. Training from scratch.")
 
+
+    model = torch.compile(model)
+    print(f"Model has {sum(p.numel() for p in model.parameters()):,} parameters\n")
     # Train
     best_val_acc = train(
         model=model,

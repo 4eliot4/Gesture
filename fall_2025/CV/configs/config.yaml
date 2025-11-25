@@ -43,7 +43,7 @@ model:
 # Training settings
 training:
   num_epochs: 500
-  learning_rate: 0.001
+  learning_rate: 0.0005
   weight_decay: 0.0001
   optimizer: "adamw"  # "adam", "adamw", "sgd"
   scheduler: "cosine"  # "cosine", "step", "plateau", or null
@@ -60,10 +60,9 @@ training:
   checkpoint_dir: "$SCRATCH/gesture/checkpoints"
   save_best_only: true
   save_frequency: 5  # Save every N epochs
-  pretained_checkpoint: ""
   
   #load
-  pretrained_checkpoint: ""
+  pretrained_checkpoint: "/work/team-ai/GESTURE/fall_2025_checkpoints/2729540_ISLR/best_model.pth"
 
 # Device settings
 device: "cuda"  # "cuda", "cpu", or "auto"
